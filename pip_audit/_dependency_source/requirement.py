@@ -22,6 +22,7 @@ from pip_requirements_parser import (
     RequirementsFile,
 )
 
+from pip_audit._dependency_graph import DependencyGraph
 from pip_audit._dependency_source import (
     DependencyFixError,
     DependencySource,
@@ -90,6 +91,7 @@ class RequirementSource(DependencySource):
         self._extra_index_urls = extra_index_urls
         self.state = state
         self._dep_cache: dict[Path, set[Dependency]] = {}
+        self._dependency_graph: DependencyGraph | None = None
 
     def collect(self) -> Iterator[Dependency]:
         """
@@ -98,6 +100,7 @@ class RequirementSource(DependencySource):
         Raises a `RequirementSourceError` on any errors.
         """
 
+        self._dependency_graph = None
         collect_files = []
         tmp_files = []
         try:
@@ -137,6 +140,15 @@ class RequirementSource(DependencySource):
             # files, we need to manually delete them on the way out.
             for t in tmp_files:
                 t.unlink()
+
+    def dependency_graph(self) -> DependencyGraph | None:
+        """
+        Return the dependency graph captured during dependency resolution.
+
+        See `DependencySource.dependency_graph`.
+        """
+
+        return self._dependency_graph
 
     def _collect_from_files(self, filenames: list[Path]) -> Iterator[Dependency]:
         # Figure out whether we have a fully resolved set of dependencies.
@@ -178,6 +190,8 @@ class RequirementSource(DependencySource):
         try:
             with TemporaryDirectory() as ve_dir:
                 ve.create(ve_dir)
+                graph = getattr(ve, "dependency_graph", None)
+                self._dependency_graph = graph if isinstance(graph, DependencyGraph) else None
         except VirtualEnvError as exc:
             raise RequirementSourceError(str(exc)) from exc
 

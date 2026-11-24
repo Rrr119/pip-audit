@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pretend  # type: ignore
 import pytest
+from packaging.version import Version
 
 import pip_audit._cli
 from pip_audit._cli import (
@@ -11,6 +12,8 @@ from pip_audit._cli import (
     VulnerabilityDescriptionChoice,
     VulnerabilityServiceChoice,
 )
+from pip_audit._dependency_graph import DependencyGraph
+from pip_audit._service import ResolvedDependency
 
 
 class TestOutputFormatChoice:
@@ -232,3 +235,79 @@ def test_environment_variable(monkeypatch):
     assert args.output == Path("/tmp/fake")
     assert not args.progress_spinner
     assert args.vulnerability_service == VulnerabilityServiceChoice.Osv
+
+
+def test_dependency_chain_flags():
+    parser = pip_audit._cli._parser()
+
+    args = parser.parse_args(["--dependency-chain", "--group-by-package"])
+
+    assert args.dependency_chain
+    assert args.group_by_package
+
+
+def test_build_dependency_chains():
+    app = ResolvedDependency(name="app", version=Version("1.0"))
+    middle = ResolvedDependency(name="middle", version=Version("2.0"))
+    vulnerable = ResolvedDependency(name="vulnerable", version=Version("0.1"))
+    graph = DependencyGraph()
+    graph.add_edge(app, middle)
+    graph.add_edge(middle, vulnerable)
+
+    source = pretend.stub(dependency_graph=lambda: graph)
+    chains = pip_audit._cli._build_dependency_chains({vulnerable: [pretend.stub()]}, source)
+
+    assert [[dep.canonical_name for dep in path] for path in chains["vulnerable"]] == [
+        ["app", "middle", "vulnerable"]
+    ]
+
+
+def test_build_dependency_chains_without_graph():
+    vulnerable = ResolvedDependency(name="vulnerable", version=Version("0.1"))
+    source = pretend.stub()
+
+    chains = pip_audit._cli._build_dependency_chains({vulnerable: [pretend.stub()]}, source)
+
+    assert chains == {"vulnerable": [[vulnerable]]}
+
+
+def test_dependency_chains_are_passed_to_formatter(monkeypatch):
+    app = ResolvedDependency(name="app", version=Version("1.0"))
+    vulnerable = ResolvedDependency(name="vulnerable", version=Version("0.1"))
+    graph = DependencyGraph()
+    graph.add_edge(app, vulnerable)
+
+    dummysource = pretend.stub(fix=lambda _: None, dependency_graph=lambda: graph)
+    monkeypatch.setattr(pip_audit._cli, "PipSource", lambda *a, **kw: dummysource)
+
+    dummyformat = pretend.stub(
+        format=pretend.call_recorder(lambda _result, _fixes, _chains: "output"),
+        is_manifest=False,
+    )
+    monkeypatch.setattr(pip_audit._cli, "ColumnsFormat", lambda *a, **kw: dummyformat)
+
+    parser = pip_audit._cli._parser()
+    monkeypatch.setattr(
+        pip_audit._cli,
+        "_parse_args",
+        lambda *a: parser.parse_args(["--dependency-chain"]),
+    )
+
+    vuln = pretend.stub(
+        fix_versions=[],
+        id="VULN-0",
+        aliases=set(),
+        description="",
+        has_any_id=lambda _: False,
+    )
+    auditor = pretend.stub(audit=lambda _: [(vulnerable, [vuln])])
+    monkeypatch.setattr(pip_audit._cli, "Auditor", lambda *a, **kw: auditor)
+
+    with pytest.raises(SystemExit):
+        pip_audit._cli.audit()
+
+    assert len(dummyformat.format.calls) == 1
+    chains = dummyformat.format.calls[0].args[2]
+    assert [[dep.canonical_name for dep in path] for path in chains["vulnerable"]] == [
+        ["app", "vulnerable"]
+    ]

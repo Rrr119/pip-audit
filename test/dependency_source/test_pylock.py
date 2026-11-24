@@ -24,6 +24,18 @@ class TestPyLockSource:
         deps = list(source.collect())
         assert deps == [SkippedDependency(name="attrs", skip_reason="no version specified")]
 
+    def test_dependency_graph(self, asset):
+        pylock = asset("pylock.basic.toml")
+        source = PyLockSource([pylock])
+
+        graph = source.dependency_graph()
+
+        assert graph is not None
+        assert [[dep.canonical_name for dep in path] for path in graph.paths_to("attrs")] == [
+            ["cattrs", "attrs"]
+        ]
+        assert [dep.canonical_name for dep in graph.roots] == ["cattrs", "numpy"]
+
     @pytest.mark.parametrize(
         ("name", "error"),
         [

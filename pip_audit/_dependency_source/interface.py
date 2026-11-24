@@ -8,6 +8,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 
+from pip_audit._dependency_graph import DependencyGraph
 from pip_audit._fix import ResolvedFixVersion
 from pip_audit._service import Dependency
 
@@ -28,6 +29,16 @@ class DependencySource(ABC):
         Yield the dependencies in this source.
         """
         raise NotImplementedError
+
+    def dependency_graph(self) -> DependencyGraph | None:
+        """
+        Return the dependency graph for this source, if one is available.
+
+        Sources that do not expose a graph may return `None`. `pip-audit` will
+        still audit their dependencies, but it cannot display dependency chains
+        for them.
+        """
+        return None
 
     @abstractmethod
     def fix(self, fix_version: ResolvedFixVersion) -> None:  # pragma: no cover

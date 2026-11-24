@@ -109,3 +109,13 @@ def test_cyclonedx_vulnerabilities_linked_to_components(vuln_data):
             assert dep.name in components_with_vulns, (
                 f"Component {dep.name} has vulnerabilities but they're not properly linked"
             )
+
+
+def test_cyclonedx_dependency_chains(vuln_data):
+    foo = next(dep for dep in vuln_data if dep.name == "foo")
+    formatter = CycloneDxFormat(inner_format=CycloneDxFormat.InnerFormat.Json)
+
+    data = json.loads(formatter.format(vuln_data, [], {foo: [[foo]]}))
+    component = next(comp for comp in data["components"] if comp["name"] == "foo")
+
+    assert component["properties"] == [{"name": "pip-audit:dependency-chain", "value": "foo==1.0"}]

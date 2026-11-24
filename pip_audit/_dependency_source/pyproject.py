@@ -15,6 +15,7 @@ import tomli_w
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 
+from pip_audit._dependency_graph import DependencyGraph
 from pip_audit._dependency_source import (
     DependencyFixError,
     DependencySource,
@@ -53,6 +54,7 @@ class PyProjectSource(DependencySource):
         """
         self.filename = filename
         self.state = state
+        self._dependency_graph: DependencyGraph | None = None
 
     def collect(self) -> Iterator[Dependency]:
         """
@@ -61,6 +63,7 @@ class PyProjectSource(DependencySource):
         Raises a `PyProjectSourceError` on any errors.
         """
 
+        self._dependency_graph = None
         with self.filename.open("rb") as f:
             pyproject_data = tomli.load(f)
 
@@ -98,12 +101,23 @@ class PyProjectSource(DependencySource):
                 ve = VirtualEnv(install_args=["-r", req_file.name], state=self.state)
                 try:
                     ve.create(ve_dir)
+                    graph = getattr(ve, "dependency_graph", None)
+                    self._dependency_graph = graph if isinstance(graph, DependencyGraph) else None
                 except VirtualEnvError as exc:
                     raise PyProjectSourceError(str(exc)) from exc
 
                 # Now query the installed packages.
                 for name, version in ve.installed_packages:
                     yield ResolvedDependency(name=name, version=version)
+
+    def dependency_graph(self) -> DependencyGraph | None:
+        """
+        Return the dependency graph captured during dependency resolution.
+
+        See `DependencySource.dependency_graph`.
+        """
+
+        return self._dependency_graph
 
     def fix(self, fix_version: ResolvedFixVersion) -> None:
         """

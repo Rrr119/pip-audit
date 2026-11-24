@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 from packaging.version import Version
 
+from ._dependency_graph import DependencyGraph, dependency_graph_from_install_report
 from ._state import AuditState
 from ._subprocess import CalledProcessError, run
 
@@ -69,6 +70,7 @@ class VirtualEnv(venv.EnvBuilder):
         self._index_url = index_url
         self._extra_index_urls = extra_index_urls
         self._packages: list[tuple[str, Version]] | None = None
+        self._dependency_graph: DependencyGraph | None = None
         self._state = state
 
     def create(self, env_dir: str | bytes | PathLike[str] | PathLike[bytes]) -> None:
@@ -173,6 +175,7 @@ class VirtualEnv(venv.EnvBuilder):
 
             install_report = json.load(tmp)
             package_list = install_report["install"]
+            self._dependency_graph = dependency_graph_from_install_report(install_report)
 
             # Convert into a series of name, version pairs
             self._packages = []
@@ -196,6 +199,22 @@ class VirtualEnv(venv.EnvBuilder):
             )
 
         yield from self._packages
+
+    @property
+    def dependency_graph(self) -> DependencyGraph:
+        """
+        The dependency graph for the packages in the virtual environment.
+
+        This method can only be called after the `create` method has been called.
+        """
+
+        if self._dependency_graph is None:
+            raise VirtualEnvError(
+                "Invalid usage of wrapper."
+                "The `create` method must be called before inspecting `dependency_graph`."
+            )
+
+        return self._dependency_graph
 
     @property
     def _index_url_args(self) -> list[str]:

@@ -12,7 +12,13 @@ from packaging.version import Version
 import pip_audit._fix as fix
 import pip_audit._service as service
 
-from .interface import VulnerabilityFormat, pypi_url, vuln_id_url
+from .interface import (
+    DependencyChains,
+    VulnerabilityFormat,
+    format_dependency_chains,
+    pypi_url,
+    vuln_id_url,
+)
 
 
 def _md_link(text: str, url: str) -> str:
@@ -26,7 +32,13 @@ class MarkdownFormat(VulnerabilityFormat):
     Markdown tables.
     """
 
-    def __init__(self, output_desc: bool, output_aliases: bool) -> None:
+    def __init__(
+        self,
+        output_desc: bool,
+        output_aliases: bool,
+        output_chains: bool = False,
+        group_by_package: bool = False,
+    ) -> None:
         """
         Create a new `MarkdownFormat`.
 
@@ -35,9 +47,15 @@ class MarkdownFormat(VulnerabilityFormat):
 
         `output_aliases` is a flag to determine whether aliases (such as CVEs) for each
         vulnerability should be included in the output.
+
+        `output_chains` controls whether dependency chains are included in the output.
+
+        `group_by_package` aggregates all vulnerabilities for a package into a single row.
         """
         self.output_desc = output_desc
         self.output_aliases = output_aliases
+        self.output_chains = output_chains
+        self.group_by_package = group_by_package
 
     @property
     def is_manifest(self) -> bool:
@@ -50,12 +68,13 @@ class MarkdownFormat(VulnerabilityFormat):
         self,
         result: dict[service.Dependency, list[service.VulnerabilityResult]],
         fixes: list[fix.FixVersion],
+        dependency_chains: DependencyChains | None = None,
     ) -> str:
         """
         Returns a Markdown formatted string representing a set of vulnerability results and applied
         fixes.
         """
-        output = self._format_vuln_results(result, fixes)
+        output = self._format_vuln_results(result, fixes, dependency_chains)
         skipped_deps_output = self._format_skipped_deps(result)
         if skipped_deps_output:
             # If we wrote the results table already, we need to add some line breaks to ensure that
@@ -69,6 +88,7 @@ class MarkdownFormat(VulnerabilityFormat):
         self,
         result: dict[service.Dependency, list[service.VulnerabilityResult]],
         fixes: list[fix.FixVersion],
+        dependency_chains: DependencyChains | None,
     ) -> str:
         header = "Name | Version | ID | Fix Versions"
         border = "--- | --- | --- | ---"
@@ -81,17 +101,33 @@ class MarkdownFormat(VulnerabilityFormat):
         if self.output_desc:
             header += " | Description"
             border += " | ---"
+        if self.output_chains or dependency_chains is not None:
+            header += " | Dependency Chain"
+            border += " | ---"
 
-        vuln_rows = [
-            self._format_vuln(
-                cast(service.ResolvedDependency, dep),
-                vuln,
-                next((f for f in fixes if f.dep == dep), None),
-            )
-            for dep, vulns in result.items()
-            if not dep.is_skipped()
-            for vuln in vulns
-        ]
+        if self.group_by_package:
+            vuln_rows = [
+                self._format_grouped_vuln(
+                    cast(service.ResolvedDependency, dep),
+                    vulns,
+                    next((f for f in fixes if f.dep == dep), None),
+                    dependency_chains,
+                )
+                for dep, vulns in result.items()
+                if not dep.is_skipped() and vulns
+            ]
+        else:
+            vuln_rows = [
+                self._format_vuln(
+                    cast(service.ResolvedDependency, dep),
+                    vuln,
+                    next((f for f in fixes if f.dep == dep), None),
+                    dependency_chains,
+                )
+                for dep, vulns in result.items()
+                if not dep.is_skipped()
+                for vuln in vulns
+            ]
 
         if not vuln_rows:
             return ""
@@ -108,6 +144,7 @@ class MarkdownFormat(VulnerabilityFormat):
         dep: service.ResolvedDependency,
         vuln: service.VulnerabilityResult,
         applied_fix: fix.FixVersion | None,
+        dependency_chains: DependencyChains | None,
     ) -> str:
         name_link = _md_link(dep.canonical_name, pypi_url(dep.canonical_name))
         id_link = _md_link(vuln.id, vuln_id_url(vuln.id))
@@ -122,6 +159,45 @@ class MarkdownFormat(VulnerabilityFormat):
             vuln_text += f" | {linked_aliases}"
         if self.output_desc:
             vuln_text += f" | {vuln.description}"
+        if self.output_chains or dependency_chains is not None:
+            vuln_text += f" | {format_dependency_chains(dependency_chains, dep)}"
+        return vuln_text
+
+    def _format_grouped_vuln(
+        self,
+        dep: service.ResolvedDependency,
+        vulns: list[service.VulnerabilityResult],
+        applied_fix: fix.FixVersion | None,
+        dependency_chains: DependencyChains | None,
+    ) -> str:
+        name_link = _md_link(dep.canonical_name, pypi_url(dep.canonical_name))
+        id_links = ", ".join(_md_link(vuln.id, vuln_id_url(vuln.id)) for vuln in vulns)
+
+        fix_versions: list[Version] = []
+        aliases: list[str] = []
+        descriptions: list[str] = []
+        for vuln in vulns:
+            for version in vuln.fix_versions:
+                if version not in fix_versions:
+                    fix_versions.append(version)
+            for alias in sorted(vuln.aliases):
+                if alias not in aliases:
+                    aliases.append(alias)
+            if vuln.description and vuln.description not in descriptions:
+                descriptions.append(vuln.description)
+
+        vuln_text = (
+            f"{name_link} | {dep.version} | {id_links} | {self._format_fix_versions(fix_versions)}"
+        )
+        if applied_fix is not None:
+            vuln_text += f" | {self._format_applied_fix(applied_fix)}"
+        if self.output_aliases:
+            linked_aliases = ", ".join(_md_link(alias, vuln_id_url(alias)) for alias in aliases)
+            vuln_text += f" | {linked_aliases}"
+        if self.output_desc:
+            vuln_text += f" | {'; '.join(descriptions)}"
+        if self.output_chains or dependency_chains is not None:
+            vuln_text += f" | {format_dependency_chains(dependency_chains, dep)}"
         return vuln_text
 
     def _format_fix_versions(self, fix_versions: list[Version]) -> str:

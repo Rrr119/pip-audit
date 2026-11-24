@@ -1,8 +1,10 @@
 import json
 
 import pytest
+from packaging.version import Version
 
 import pip_audit._format as format
+from pip_audit._service import ResolvedDependency
 
 
 @pytest.mark.parametrize("output_desc, output_aliases", ([True, False], [True, False]))
@@ -262,3 +264,25 @@ def test_json_skipped_fix(vuln_data, skipped_fix_data):
         ],
     }
     assert json_format.format(vuln_data, skipped_fix_data) == json.dumps(expected_json)
+
+
+def test_json_dependency_chains(vuln_data):
+    foo = next(dep for dep in vuln_data if dep.name == "foo")
+    root = ResolvedDependency(name="root", version=Version("1.0"))
+    middle = ResolvedDependency(name="middle", version=Version("2.0"))
+    chains = {foo: [[root, middle, foo]]}
+
+    json_format = format.JsonFormat(False, False, output_chains=True)
+    output = json.loads(json_format.format(vuln_data, [], chains))
+
+    assert output["dependencies"][0]["dependency_chains"] == [
+        ["root==1.0", "middle==2.0", "foo==1.0"]
+    ]
+    assert "dependency_chains" not in output["dependencies"][1]
+
+
+def test_json_dependency_chains_are_opt_in(vuln_data):
+    json_format = format.JsonFormat(False, False)
+    output = json.loads(json_format.format(vuln_data, []))
+
+    assert all("dependency_chains" not in dep for dep in output["dependencies"])

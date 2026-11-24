@@ -51,6 +51,7 @@ with support from Google, and is currently maintained under the
   [CycloneDX](https://cyclonedx.org/) XML or JSON
 * Support for automatically fixing vulnerable dependencies (`--fix`)
 * Human and machine-readable output formats (columnar, Markdown, JSON)
+* Root-to-vulnerability dependency chains and per-package vulnerability aggregation
 * Seamlessly reuses your existing local `pip` caches
 
 ## Installation
@@ -138,6 +139,7 @@ python -m pip_audit --help
 usage: pip-audit [-h] [-V] [-l] [-r REQUIREMENT] [--locked] [-f FORMAT]
                  [-s SERVICE] [--osv-url OSV_URL] [-d] [-S]
                  [--desc [{on,off,auto}]] [--aliases [{on,off,auto}]]
+                 [--dependency-chain] [--group-by-package]
                  [--cache-dir CACHE_DIR] [--progress-spinner {on,off}]
                  [--timeout TIMEOUT] [--path PATH] [-v] [--fix]
                  [--require-hashes] [--index-url INDEX_URL]
@@ -187,6 +189,15 @@ options:
                         defaults to `on` for the `json` format. This flag has
                         no effect on the `cyclonedx-json` or `cyclonedx-xml`
                         formats. (default: auto)
+  --dependency-chain, --dependency-chains, --show-dependency-chain, --dependency-tree
+                        include the dependency chain from each top-level
+                        package to each vulnerable package; `json` output
+                        gains a `dependency_chains` field and tabular formats
+                        gain a `Dependency Chain` column (default: False)
+  --group-by-package, --aggregate-by-package
+                        aggregate all vulnerabilities for a package into a
+                        single row in the `columns` and `markdown` formats
+                        (default: False)
   --cache-dir CACHE_DIR
                         the directory to use as an HTTP cache for PyPI; uses
                         the `pip` HTTP cache by default (default: None)
@@ -412,6 +423,46 @@ Name  Version ID             Fix Versions Applied Fix
 flask 0.5     PYSEC-2019-179 1.0          Successfully upgraded flask (0.5 => 1.0)
 flask 0.5     PYSEC-2018-66  0.12.3       Successfully upgraded flask (0.5 => 1.0)
 ```
+
+### Dependency chains
+
+Use `--dependency-chain` to show how each vulnerable package is reached from
+the top-level packages that introduced it. The chain is added to columnar and
+Markdown output as a `Dependency Chain` column, and to JSON output as a
+package-level `dependency_chains` field:
+
+```console
+$ pip-audit --dependency-chain
+Found 1 known vulnerability in 1 package
+Name  Version ID             Fix Versions Dependency Chain
+----  ------- -------------- ------------ --------------------------------------
+jinja2 3.0.2  PYSEC-2024-1   3.1.6        flask==0.5 -> jinja2==3.0.2
+```
+
+In JSON, each dependency is still emitted exactly once. If multiple paths reach
+the same vulnerable package, all paths are grouped under that package:
+
+```json
+{
+  "name": "jinja2",
+  "version": "3.0.2",
+  "vulns": [
+    {
+      "id": "PYSEC-2024-1",
+      "fix_versions": ["3.1.6"]
+    }
+  ],
+  "dependency_chains": [
+    ["flask==0.5", "jinja2==3.0.2"],
+    ["my-service==1.0", "template-engine==2.0", "jinja2==3.0.2"]
+  ]
+}
+```
+
+Use `--group-by-package` with the `columns` or `markdown` formats to emit one
+row per package instead of one row per vulnerability. The package's
+vulnerability IDs, fix versions, aliases, and descriptions are aggregated in
+that row.
 
 ## Troubleshooting
 

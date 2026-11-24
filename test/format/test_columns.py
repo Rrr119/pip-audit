@@ -1,10 +1,12 @@
 import sys
 
 import pytest
+from packaging.version import Version
 
 import pip_audit._format as format
 from pip_audit._format.columns import _osc8_link
 from pip_audit._format.interface import pypi_url, vuln_id_url
+from pip_audit._service import ResolvedDependency
 
 
 # Shortcuts for building expected output with OSC8 links
@@ -107,3 +109,43 @@ def test_columns_terminal_links(monkeypatch, vuln_data):
 {_P("foo")}  1.0     {_V("VULN-1")} 1.0          {_V("CVE-0000-00001")}
 {_P("bar")}  0.1     {_V("VULN-2")}              {_V("CVE-0000-00002")}"""
     assert columns_format.format(vuln_data, []) == expected_columns
+
+
+def test_columns_dependency_chains(vuln_data):
+    foo = next(dep for dep in vuln_data if dep.name == "foo")
+    root = ResolvedDependency(name="root", version=Version("1.0"))
+    middle = ResolvedDependency(name="middle", version=Version("2.0"))
+    chains = {foo: [[root, middle, foo]]}
+
+    columns_format = format.ColumnsFormat(False, False, output_chains=True)
+    lines = columns_format.format(vuln_data, [], chains).splitlines()
+
+    assert "Dependency Chain" in lines[0]
+    assert lines[2].startswith("foo  1.0     VULN-0 1.1,1.4")
+    assert lines[2].endswith("root==1.0 -> middle==2.0 -> foo==1.0")
+
+
+def test_columns_group_by_package(vuln_data):
+    columns_format = format.ColumnsFormat(False, False, group_by_package=True)
+    lines = columns_format.format(vuln_data, []).splitlines()
+
+    assert len(lines) == 4
+    assert lines[2].startswith("foo  1.0     VULN-0, VULN-1")
+    assert "1.1,1.4,1.0" in lines[2]
+    assert lines[3].startswith("bar  0.1     VULN-2")
+
+
+def test_columns_group_by_package_with_chains(vuln_data):
+    foo = next(dep for dep in vuln_data if dep.name == "foo")
+    chains = {foo: [[foo]]}
+
+    columns_format = format.ColumnsFormat(
+        False,
+        False,
+        output_chains=True,
+        group_by_package=True,
+    )
+    lines = columns_format.format(vuln_data, [], chains).splitlines()
+
+    assert len(lines) == 4
+    assert lines[2].endswith("foo==1.0")

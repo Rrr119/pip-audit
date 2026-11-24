@@ -9,20 +9,23 @@ import logging
 from typing import cast
 
 from cyclonedx import output
+from cyclonedx.model import Property
 from cyclonedx.model.bom import Bom
 from cyclonedx.model.component import Component
 from cyclonedx.model.vulnerability import BomTarget, Vulnerability
 
 import pip_audit._fix as fix
 import pip_audit._service as service
+from pip_audit._dependency_graph import format_dependency_path
 
-from .interface import VulnerabilityFormat
+from .interface import DependencyChains, VulnerabilityFormat, dependency_chains_for
 
 logger = logging.getLogger(__name__)
 
 
 def _pip_audit_result_to_bom(
     result: dict[service.Dependency, list[service.VulnerabilityResult]],
+    dependency_chains: DependencyChains | None = None,
 ) -> Bom:
     vulnerabilities = []
     components = []
@@ -34,7 +37,15 @@ def _pip_audit_result_to_bom(
             continue
         dep = cast(service.ResolvedDependency, dep)
 
-        c = Component(name=dep.name, version=str(dep.version))
+        properties = [
+            Property(name="pip-audit:dependency-chain", value=format_dependency_path(chain))
+            for chain in dependency_chains_for(dependency_chains, dep)
+        ]
+        c = Component(
+            name=dep.name,
+            version=str(dep.version),
+            properties=properties or None,
+        )
         vuln_list = [
             Vulnerability(
                 id=vuln.id,
@@ -86,6 +97,7 @@ class CycloneDxFormat(VulnerabilityFormat):
         self,
         result: dict[service.Dependency, list[service.VulnerabilityResult]],
         fixes: list[fix.FixVersion],
+        dependency_chains: DependencyChains | None = None,
     ) -> str:
         """
         Returns a CycloneDX formatted string for a given mapping of dependencies to vulnerability
@@ -96,7 +108,7 @@ class CycloneDxFormat(VulnerabilityFormat):
         if fixes:
             logger.warning("--fix output is unsupported by CycloneDX formats")
 
-        bom = _pip_audit_result_to_bom(result)
+        bom = _pip_audit_result_to_bom(result, dependency_chains)
         formatter = output.make_outputter(
             bom=bom,
             output_format=self._inner_format.value,

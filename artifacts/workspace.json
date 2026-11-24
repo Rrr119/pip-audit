@@ -1,0 +1,17 @@
+{
+  "root": "/home/dev/feedback/uid36765",
+  "B": "/home/dev/feedback/uid36765",
+  "sha": "2bb9b464f9978dcba3cc30de719ca8acbe8a8c1c",
+  "wslDistro": "Ubuntu-26.04",
+  "source": {
+    "owner": "pypa",
+    "repo": "pip-audit",
+    "sha": "2bb9b464f9978dcba3cc30de719ca8acbe8a8c1c"
+  },
+  "fork": {
+    "owner": "Rrr119",
+    "repo": "pip-audit",
+    "cloneUrl": "https://github.com/Rrr119/pip-audit.git"
+  },
+  "at": "2026-11-24T04:24:11.872Z"
+}

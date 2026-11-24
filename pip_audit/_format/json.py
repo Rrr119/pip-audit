@@ -9,8 +9,9 @@ from typing import Any, cast
 
 import pip_audit._fix as fix
 import pip_audit._service as service
+from pip_audit._dependency_graph import format_dependency
 
-from .interface import VulnerabilityFormat
+from .interface import DependencyChains, VulnerabilityFormat, dependency_chains_for
 
 
 class JsonFormat(VulnerabilityFormat):
@@ -19,7 +20,7 @@ class JsonFormat(VulnerabilityFormat):
     JSON objects.
     """
 
-    def __init__(self, output_desc: bool, output_aliases: bool):
+    def __init__(self, output_desc: bool, output_aliases: bool, output_chains: bool = False):
         """
         Create a new `JsonFormat`.
 
@@ -28,9 +29,13 @@ class JsonFormat(VulnerabilityFormat):
 
         `output_aliases` is a flag to determine whether aliases (such as CVEs) for each
         vulnerability should be included in the output.
+
+        `output_chains` is a flag to determine whether dependency chains should be included
+        in the output.
         """
         self.output_desc = output_desc
         self.output_aliases = output_aliases
+        self.output_chains = output_chains
 
     @property
     def is_manifest(self) -> bool:
@@ -43,6 +48,7 @@ class JsonFormat(VulnerabilityFormat):
         self,
         result: dict[service.Dependency, list[service.VulnerabilityResult]],
         fixes: list[fix.FixVersion],
+        dependency_chains: DependencyChains | None = None,
     ) -> str:
         """
         Returns a JSON formatted string for a given mapping of dependencies to vulnerability
@@ -51,13 +57,18 @@ class JsonFormat(VulnerabilityFormat):
         See `VulnerabilityFormat.format`.
         """
         output_json = {
-            "dependencies": [self._format_dep(dep, vulns) for dep, vulns in result.items()],
+            "dependencies": [
+                self._format_dep(dep, vulns, dependency_chains) for dep, vulns in result.items()
+            ],
             "fixes": [self._format_fix(f) for f in fixes],
         }
         return json.dumps(output_json)
 
     def _format_dep(
-        self, dep: service.Dependency, vulns: list[service.VulnerabilityResult]
+        self,
+        dep: service.Dependency,
+        vulns: list[service.VulnerabilityResult],
+        dependency_chains: DependencyChains | None,
     ) -> dict[str, Any]:
         if dep.is_skipped():
             dep = cast(service.SkippedDependency, dep)
@@ -67,11 +78,18 @@ class JsonFormat(VulnerabilityFormat):
             }
 
         dep = cast(service.ResolvedDependency, dep)
-        return {
+        dep_json = {
             "name": dep.canonical_name,
             "version": str(dep.version),
             "vulns": [self._format_vuln(vuln) for vuln in vulns],
         }
+        if self.output_chains or dependency_chains is not None:
+            chains = dependency_chains_for(dependency_chains, dep)
+            if chains:
+                dep_json["dependency_chains"] = [
+                    [format_dependency(node) for node in chain] for chain in chains
+                ]
+        return dep_json
 
     def _format_vuln(self, vuln: service.VulnerabilityResult) -> dict[str, Any]:
         vuln_json = {

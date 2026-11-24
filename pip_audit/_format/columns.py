@@ -15,7 +15,13 @@ from packaging.version import Version
 import pip_audit._fix as fix
 import pip_audit._service as service
 
-from .interface import VulnerabilityFormat, pypi_url, vuln_id_url
+from .interface import (
+    DependencyChains,
+    VulnerabilityFormat,
+    format_dependency_chains,
+    pypi_url,
+    vuln_id_url,
+)
 
 _OSC8_RE = re.compile(r"\033]8;;[^\033]*\033\\")
 
@@ -53,7 +59,13 @@ class ColumnsFormat(VulnerabilityFormat):
     columns.
     """
 
-    def __init__(self, output_desc: bool, output_aliases: bool):
+    def __init__(
+        self,
+        output_desc: bool,
+        output_aliases: bool,
+        output_chains: bool = False,
+        group_by_package: bool = False,
+    ):
         """
         Create a new `ColumnFormat`.
 
@@ -62,9 +74,15 @@ class ColumnsFormat(VulnerabilityFormat):
 
         `output_aliases` is a flag to determine whether aliases (such as CVEs) for each
         vulnerability should be included in the output.
+
+        `output_chains` controls whether dependency chains are included in the output.
+
+        `group_by_package` aggregates all vulnerabilities for a package into a single row.
         """
         self.output_desc = output_desc
         self.output_aliases = output_aliases
+        self.output_chains = output_chains
+        self.group_by_package = group_by_package
 
     @property
     def is_manifest(self) -> bool:
@@ -77,6 +95,7 @@ class ColumnsFormat(VulnerabilityFormat):
         self,
         result: dict[service.Dependency, list[service.VulnerabilityResult]],
         fixes: list[fix.FixVersion],
+        dependency_chains: DependencyChains | None = None,
     ) -> str:
         """
         Returns a column formatted string for a given mapping of dependencies to vulnerability
@@ -92,18 +111,34 @@ class ColumnsFormat(VulnerabilityFormat):
             header.append("Aliases")
         if self.output_desc:
             header.append("Description")
+        include_chains = self.output_chains or dependency_chains is not None
+        if include_chains:
+            header.append("Dependency Chain")
         vuln_data.append(header)
 
-        vuln_rows = [
-            self._format_vuln(
-                cast(service.ResolvedDependency, dep),
-                vuln,
-                next((f for f in fixes if f.dep == dep), None),
-            )
-            for dep, vulns in result.items()
-            if not dep.is_skipped()
-            for vuln in vulns
-        ]
+        if self.group_by_package:
+            vuln_rows = [
+                self._format_grouped_vuln(
+                    cast(service.ResolvedDependency, dep),
+                    vulns,
+                    next((f for f in fixes if f.dep == dep), None),
+                    dependency_chains,
+                )
+                for dep, vulns in result.items()
+                if not dep.is_skipped() and vulns
+            ]
+        else:
+            vuln_rows = [
+                self._format_vuln(
+                    cast(service.ResolvedDependency, dep),
+                    vuln,
+                    next((f for f in fixes if f.dep == dep), None),
+                    dependency_chains,
+                )
+                for dep, vulns in result.items()
+                if not dep.is_skipped()
+                for vuln in vulns
+            ]
 
         vuln_data.extend(vuln_rows)
 
@@ -148,6 +183,7 @@ class ColumnsFormat(VulnerabilityFormat):
         dep: service.ResolvedDependency,
         vuln: service.VulnerabilityResult,
         applied_fix: fix.FixVersion | None,
+        dependency_chains: DependencyChains | None,
     ) -> list[Any]:
         link = _osc8_link if sys.stdout.isatty() else lambda text, _url: text
         vuln_data = [
@@ -162,6 +198,45 @@ class ColumnsFormat(VulnerabilityFormat):
             vuln_data.append(", ".join(link(a, vuln_id_url(a)) for a in vuln.aliases))
         if self.output_desc:
             vuln_data.append(vuln.description)
+        if self.output_chains or dependency_chains is not None:
+            vuln_data.append(format_dependency_chains(dependency_chains, dep))
+        return vuln_data
+
+    def _format_grouped_vuln(
+        self,
+        dep: service.ResolvedDependency,
+        vulns: list[service.VulnerabilityResult],
+        applied_fix: fix.FixVersion | None,
+        dependency_chains: DependencyChains | None,
+    ) -> list[Any]:
+        link = _osc8_link if sys.stdout.isatty() else lambda text, _url: text
+        fix_versions: list[Version] = []
+        aliases: list[str] = []
+        descriptions: list[str] = []
+        for vuln in vulns:
+            for version in vuln.fix_versions:
+                if version not in fix_versions:
+                    fix_versions.append(version)
+            for alias in sorted(vuln.aliases):
+                if alias not in aliases:
+                    aliases.append(alias)
+            if vuln.description and vuln.description not in descriptions:
+                descriptions.append(vuln.description)
+
+        vuln_data: list[Any] = [
+            link(dep.canonical_name, pypi_url(dep.canonical_name)),
+            dep.version,
+            ", ".join(link(vuln.id, vuln_id_url(vuln.id)) for vuln in vulns),
+            self._format_fix_versions(fix_versions),
+        ]
+        if applied_fix is not None:
+            vuln_data.append(self._format_applied_fix(applied_fix))
+        if self.output_aliases:
+            vuln_data.append(", ".join(link(alias, vuln_id_url(alias)) for alias in aliases))
+        if self.output_desc:
+            vuln_data.append("; ".join(descriptions))
+        if self.output_chains or dependency_chains is not None:
+            vuln_data.append(format_dependency_chains(dependency_chains, dep))
         return vuln_data
 
     def _format_fix_versions(self, fix_versions: list[Version]) -> str:

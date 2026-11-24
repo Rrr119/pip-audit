@@ -8,11 +8,13 @@ import os
 import subprocess
 import sys
 from collections.abc import Iterator, Sequence
+from importlib.metadata import distributions
 from pathlib import Path
 
 import pip_api
 from packaging.version import InvalidVersion, Version
 
+from pip_audit._dependency_graph import DependencyGraph, dependency_graph_from_distributions
 from pip_audit._dependency_source import (
     DependencyFixError,
     DependencySource,
@@ -134,6 +136,23 @@ class PipSource(DependencySource):
                 yield dep
         except Exception as e:
             raise PipSourceError("failed to list installed distributions") from e
+
+    def dependency_graph(self) -> DependencyGraph | None:
+        """
+        Return a dependency graph built from installed package metadata.
+
+        See `DependencySource.dependency_graph`.
+        """
+
+        try:
+            if self._paths:
+                installed = distributions(path=[str(path) for path in self._paths])
+            else:
+                installed = distributions()
+            return dependency_graph_from_distributions(installed)
+        except Exception as e:
+            logger.debug(f"failed to build dependency graph: {e}")
+            return None
 
     def fix(self, fix_version: ResolvedFixVersion) -> None:
         """

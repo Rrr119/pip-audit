@@ -1,0 +1,18 @@
+{
+  "uid": "36765",
+  "harness": "Codex CLI",
+  "snapshotUrl": "https://github.com/Rrr119/pip-audit/commit/2bb9b464f9978dcba3cc30de719ca8acbe8a8c1c",
+  "harnessVersion": "codex-cli 0.167.2",
+  "operatingSystem": "Ubuntu 26.04.1 LTS",
+  "operatingSystemCell": [
+    "MacOS/Linux"
+  ],
+  "outputDirectory": "/home/dev/feedback/uid36765",
+  "wslDistro": "Ubuntu-26.04",
+  "B": {
+    "success": false,
+    "canceled": true,
+    "error": "任务已取消",
+    "side": "B"
+  }
+}

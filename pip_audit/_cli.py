@@ -16,6 +16,7 @@ from typing import IO, NoReturn, cast
 
 from pip_audit import __version__
 from pip_audit._audit import AuditOptions, Auditor
+from pip_audit._dependency_graph import DependencyGraph, dependency_chains_for_result
 from pip_audit._dependency_source import (
     DependencySource,
     DependencySourceError,
@@ -32,6 +33,7 @@ from pip_audit._format import (
     MarkdownFormat,
     VulnerabilityFormat,
 )
+from pip_audit._format.interface import DependencyChains
 from pip_audit._service import EcosystemsService, OsvService, PyPIService
 from pip_audit._service.interface import ConnectionError as VulnServiceConnectionError
 from pip_audit._service.interface import (
@@ -79,17 +81,23 @@ class OutputFormatChoice(str, enum.Enum):
     CycloneDxXml = "cyclonedx-xml"
     Markdown = "markdown"
 
-    def to_format(self, output_desc: bool, output_aliases: bool) -> VulnerabilityFormat:
+    def to_format(
+        self,
+        output_desc: bool,
+        output_aliases: bool,
+        output_chains: bool = False,
+        group_by_package: bool = False,
+    ) -> VulnerabilityFormat:
         if self is OutputFormatChoice.Columns:
-            return ColumnsFormat(output_desc, output_aliases)
+            return ColumnsFormat(output_desc, output_aliases, output_chains, group_by_package)
         elif self is OutputFormatChoice.Json:
-            return JsonFormat(output_desc, output_aliases)
+            return JsonFormat(output_desc, output_aliases, output_chains)
         elif self is OutputFormatChoice.CycloneDxJson:
             return CycloneDxFormat(inner_format=CycloneDxFormat.InnerFormat.Json)
         elif self is OutputFormatChoice.CycloneDxXml:
             return CycloneDxFormat(inner_format=CycloneDxFormat.InnerFormat.Xml)
         elif self is OutputFormatChoice.Markdown:
-            return MarkdownFormat(output_desc, output_aliases)
+            return MarkdownFormat(output_desc, output_aliases, output_chains, group_by_package)
         else:
             assert_never(self)  # pragma: no cover
 
@@ -192,6 +200,30 @@ def _fatal(msg: str) -> NoReturn:  # pragma: no cover
     sys.exit(1)
 
 
+def _build_dependency_chains(
+    result: dict[Dependency, list[VulnerabilityResult]],
+    source: DependencySource,
+) -> DependencyChains:
+    """
+    Build a package-to-dependency-chains mapping for the audit results.
+
+    Sources without graph support fall back to treating each audited package as
+    its own (direct) chain.
+    """
+
+    graph: DependencyGraph | None = None
+    graph_getter = getattr(source, "dependency_graph", None)
+    if callable(graph_getter):
+        try:
+            graph = graph_getter()
+        except Exception as e:  # pragma: no cover - source-specific failures
+            logger.debug(f"failed to obtain dependency graph: {e}")
+    if graph is None:
+        logger.debug("dependency graph unavailable; falling back to direct dependency chains")
+
+    return dependency_chains_for_result(result, graph)
+
+
 def _parser() -> argparse.ArgumentParser:  # pragma: no cover
     parser = argparse.ArgumentParser(
         prog="pip-audit",
@@ -290,6 +322,25 @@ def _parser() -> argparse.ArgumentParser:  # pragma: no cover
         help="includes alias IDs for each vulnerability; "
         "`auto` defaults to `on` for the `json` format. This flag has no "
         "effect on the `cyclonedx-json` or `cyclonedx-xml` formats.",
+    )
+    parser.add_argument(
+        "--dependency-chain",
+        "--dependency-chains",
+        "--show-dependency-chain",
+        "--dependency-tree",
+        action="store_true",
+        dest="dependency_chain",
+        help="include the dependency chain from each top-level package to each vulnerable "
+        "package; `json` output gains a `dependency_chains` field and tabular formats gain a "
+        "`Dependency Chain` column",
+    )
+    parser.add_argument(
+        "--group-by-package",
+        "--aggregate-by-package",
+        action="store_true",
+        dest="group_by_package",
+        help="aggregate all vulnerabilities for a package into a single row in the `columns` and "
+        "`markdown` formats",
     )
     parser.add_argument(
         "--cache-dir",
@@ -457,7 +508,12 @@ def audit() -> None:  # pragma: no cover
 
     output_desc = args.desc.to_bool(args.format)
     output_aliases = args.aliases.to_bool(args.format)
-    formatter = args.format.to_format(output_desc, output_aliases)
+    formatter = args.format.to_format(
+        output_desc,
+        output_aliases,
+        output_chains=args.dependency_chain,
+        group_by_package=args.group_by_package,
+    )
 
     # Check for flags that are only valid with project paths
     if args.project_path is None:
@@ -545,6 +601,7 @@ def audit() -> None:  # pragma: no cover
         auditor = Auditor(service, options=AuditOptions(dry_run=args.dry_run and not args.fix))
 
         result: dict[Dependency, list[VulnerabilityResult]] = {}
+        dependency_chains: DependencyChains = {}
         pkg_count = 0
         vuln_count = 0
         skip_count = 0
@@ -581,6 +638,9 @@ def audit() -> None:  # pragma: no cover
                 "Tip: your network may be blocking this service. "
                 "Try another service with `-s SERVICE`"
             )
+
+        if args.dependency_chain:
+            dependency_chains = _build_dependency_chains(result, source)
 
         # If the `--fix` flag has been applied, find a set of suitable fix versions and upgrade the
         # dependencies at the source
@@ -633,7 +693,10 @@ def audit() -> None:  # pragma: no cover
             )
         print(summary_msg, file=sys.stderr)
         with _output_io(args.output) as io:
-            print(formatter.format(result, fixes), file=io)
+            if args.dependency_chain:
+                print(formatter.format(result, fixes, dependency_chains), file=io)
+            else:
+                print(formatter.format(result, fixes), file=io)
         if pkg_count != fixed_pkg_count:
             sys.exit(1)
     else:
@@ -649,4 +712,7 @@ def audit() -> None:  # pragma: no cover
         # even if nothing other than a dependency summary is present.
         if skip_count > 0 or formatter.is_manifest:
             with _output_io(args.output) as io:
-                print(formatter.format(result, fixes), file=io)
+                if args.dependency_chain:
+                    print(formatter.format(result, fixes, dependency_chains), file=io)
+                else:
+                    print(formatter.format(result, fixes), file=io)

@@ -1,8 +1,10 @@
 import pytest
+from packaging.version import Version
 
 import pip_audit._format as format
 from pip_audit._format.interface import pypi_url, vuln_id_url
 from pip_audit._format.markdown import _md_link
+from pip_audit._service import ResolvedDependency
 
 
 # Shortcuts for building expected output with Markdown links
@@ -101,3 +103,42 @@ Name | Version | ID | Fix Versions | Applied Fix | Aliases
 {_P("foo")} | 1.0 | {_V("VULN-1")} | 1.0 | Successfully upgraded foo (1.0 => 1.8) | {_V("CVE-0000-00001")}
 {_P("bar")} | 0.1 | {_V("VULN-2")} |  | Failed to fix bar (0.1): skip-reason | {_V("CVE-0000-00002")}"""
     assert markdown_format.format(vuln_data, skipped_fix_data) == expected_markdown
+
+
+def test_markdown_dependency_chains(vuln_data):
+    foo = next(dep for dep in vuln_data if dep.name == "foo")
+    root = ResolvedDependency(name="root", version=Version("1.0"))
+    middle = ResolvedDependency(name="middle", version=Version("2.0"))
+    chains = {foo: [[root, middle, foo]]}
+
+    markdown_format = format.MarkdownFormat(False, False, output_chains=True)
+    lines = markdown_format.format(vuln_data, [], chains).splitlines()
+
+    assert lines[1].endswith("| Dependency Chain")
+    assert lines[3].endswith("| root==1.0 -> middle==2.0 -> foo==1.0")
+
+
+def test_markdown_group_by_package(vuln_data):
+    markdown_format = format.MarkdownFormat(False, False, group_by_package=True)
+    lines = markdown_format.format(vuln_data, []).splitlines()
+
+    assert len(lines) == 5
+    assert "VULN-0" in lines[3]
+    assert "VULN-1" in lines[3]
+    assert "1.1,1.4,1.0" in lines[3]
+
+
+def test_markdown_group_by_package_with_chains(vuln_data):
+    foo = next(dep for dep in vuln_data if dep.name == "foo")
+    chains = {foo: [[foo]]}
+
+    markdown_format = format.MarkdownFormat(
+        False,
+        False,
+        output_chains=True,
+        group_by_package=True,
+    )
+    lines = markdown_format.format(vuln_data, [], chains).splitlines()
+
+    assert len(lines) == 5
+    assert lines[3].endswith("| foo==1.0")

@@ -5,10 +5,15 @@ Collect dependencies from `pylock.toml` files.
 import logging
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import tomli
 from packaging.version import Version
 
+from pip_audit._dependency_graph import (
+    DependencyGraph,
+    dependency_graph_from_pylock_packages,
+)
 from pip_audit._dependency_source import DependencyFixError, DependencySource, DependencySourceError
 from pip_audit._fix import ResolvedFixVersion
 from pip_audit._service import Dependency, ResolvedDependency
@@ -30,6 +35,7 @@ class PyLockSource(DependencySource):
         """
 
         self._filenames = filenames
+        self._dependency_graph: DependencyGraph | None = None
 
     def collect(self) -> Iterator[Dependency]:
         """
@@ -39,6 +45,46 @@ class PyLockSource(DependencySource):
         """
         for filename in self._filenames:
             yield from self._collect_from_file(filename)
+
+    def dependency_graph(self) -> DependencyGraph | None:
+        """
+        Return the dependency graph derived from the lockfile contents.
+
+        See `DependencySource.dependency_graph`.
+        """
+
+        if self._dependency_graph is None:
+            packages: list[dict[str, Any]] = []
+            for filename in self._filenames:
+                packages.extend(self._packages_from_file(filename))
+            self._dependency_graph = dependency_graph_from_pylock_packages(packages)
+
+        return self._dependency_graph
+
+    def _packages_from_file(self, filename: Path) -> list[dict[str, Any]]:
+        try:
+            with filename.open(mode="rb") as f:
+                pylock = tomli.load(f)
+        except tomli.TOMLDecodeError as e:
+            raise PyLockSourceError(f"{filename}: invalid TOML in lockfile") from e
+
+        lock_version = pylock.get("lock-version")
+        if not lock_version:
+            raise PyLockSourceError(f"{filename}: missing lock-version in lockfile")
+
+        lock_version = Version(lock_version)
+        if lock_version.major != 1:
+            raise PyLockSourceError(f"{filename}: lockfile version {lock_version} is not supported")
+
+        packages = pylock.get("packages")
+        if not packages:
+            raise PyLockSourceError(f"{filename}: missing packages in lockfile")
+
+        for idx, package in enumerate(packages):
+            if not package.get("name"):
+                raise PyLockSourceError(f"{filename}: invalid package #{idx}: no name")
+
+        return cast(list[dict[str, Any]], packages)
 
     def _collect_from_file(self, filename: Path) -> Iterator[Dependency]:
         """
